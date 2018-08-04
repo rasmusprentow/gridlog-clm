@@ -10,7 +10,7 @@ program
   .option("-i, --id <orgId>", "Organization id")
   .action(async (name, options) => {
     setConfig(options);
-    const { org } = options;
+    let { org } = options;
     if (!org) {
       const { orgId, message } = await createOrganization(name);
       if (!orgId) {
@@ -19,21 +19,45 @@ program
       }
       org = orgId;
     }
-
+    await changeActiveOrg(org);
     await createDataSource(name, org);
   });
 
 program.command("delete <name>").action(async (name, options) => {
   setConfig(options);
-  //queryGrapahana('/api/org')
   const { id } = await getOrgByName(name);
-  console.log(`Are you sure you want to delete ${name} with id ${id} (y/N)`);
-  const input = await askOnce();
+  const input = await askOnce(`Are you sure you want to delete ${name} with id ${id} (y/N)`);
   if (input === "y") {
     console.log(await queryGrapahana(`/api/orgs/${id}`, null, "DELETE"));
   }
   process.exit(0)
 });
+
+program.command("keys").action(async (ignore, options) => {
+    setConfig(options);
+    const keys = await queryGrapahana('/api/auth/keys');
+    console.log('All api keys:')
+    console.log(keys);
+    while (true) {
+        const input = await askOnce('Enter id to delete (enter to continue)')
+        if(!input) {
+            break; 
+        }
+        console.log(await queryGrapahana(`/api/auth/keys/${input}`, null, "DELETE"));
+    }
+    const answer = await askOnce('Create new key (y/N)?')
+    if(answer.toLowerCase() === 'y') {
+        const name = await askOnce('Enter key name')
+        console.log('Creating new admin key')
+        console.log(await queryGrapahana('/api/auth/keys', {name, role: 'Admin'}));
+    }
+    process.exit(0)
+})
+
+program.command('test').action(async (options) => {
+    setConfig(options)
+    await changeActiveOrg(1)
+})
 
 program.parse(process.argv);
 
@@ -41,12 +65,14 @@ function setConfig(options) {
   const {
     parent: { config: configPath }
   } = options;
-  console.log("Generating ", options, configPath);
-
   config = require(configPath);
   if (!config) {
     console.error(`Could not find config at ${configPath}`);
   }
+}
+
+async function changeActiveOrg(orgId) {
+    await queryGrapahana(`/api/user/using/${orgId}`, null, "POST");
 }
 
 async function createOrganization(name) {
@@ -60,10 +86,10 @@ async function createOrganization(name) {
 async function createDataSource(name, orgId) {
   start("Create Datastore");
   const request = {
-    name: `${name}'_ds`,
+    name: `${name}_ds`,
     orgId: `${orgId}`,
     database: `cus_${name}`,
-    ...config.grapaha.datasource
+    ...config.graphana.datasource
   };
 
   let count = 0;
@@ -73,9 +99,9 @@ async function createDataSource(name, orgId) {
     const result = await queryGrapahana("/api/datasources", request);
     console.log(`Created graphana datasource with id ${result.id}`);
     console.log(result);
-    const { message } = await queryGrapahana(`/api/datasources/${result.id}`);
-    console.log("message", message);
-    success = message !== "Not Found" && message !== "Permission denied";
+    const  response  = await queryGrapahana(`/api/datasources/${result.id}`);
+    console.log("Checking if DS exist", response);
+    success = response.message !== "Not Found" && response.message !== "Permission denied";
     if (!success) {
       console.log(
         `Datasource not created.  ${count < 5 ? "Trying again" : ""}`
@@ -94,7 +120,6 @@ async function createDataSource(name, orgId) {
 async function getOrgByName(name) {
   return await queryGrapahana(`/api/orgs/name/${name}`);
 }
-//async function queryGraphana(path, )
 
 async function queryGrapahana(path, body, method) {
   const { graphana: gConfig } = config;
@@ -118,16 +143,15 @@ function done(name) {
   console.log(`================= done (${name})`);
 }
 
-function askOnce() {
+function askOnce(question) {
   var stdin = process.stdin,
     stdout = process.stdout;
 
   stdin.resume();
-  stdout.write(": ");
+  stdout.write(`${question}: `);
 
   return new Promise(res => {
     stdin.once("data", function(data) {
-      console.log("dara", data.toString());
       res(data.toString().trim());
     });
   });
